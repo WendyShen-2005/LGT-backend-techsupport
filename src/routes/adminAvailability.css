@@ -1,0 +1,149 @@
+/* Layout utilities (Tailwind-like) */
+
+.p-6 {
+  padding: 1.5rem;
+}
+
+.max-w-6xl {
+  max-width: 72rem;
+}
+
+.mx-auto {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.font-sans {
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.text-2xl {
+  font-size: 1.5rem;
+}
+
+.font-bold {
+  font-weight: bold;
+}
+
+.mb-2 {
+  margin-bottom: 0.5rem;
+}
+
+.mb-4 {
+  margin-bottom: 1rem;
+}
+
+.mt-4 {
+  margin-top: 1rem;
+}
+
+.mt-6 {
+  margin-top: 1.5rem;
+}
+
+.text-gray-600 {
+  color: #4b5563;
+}
+
+.text-gray-500 {
+  color: #6b7280;
+}
+
+.text-sm {
+  font-size: 0.875rem;
+}
+
+/* Table styling */
+
+.border-collapse {
+  border-collapse: collapse;
+}
+
+.border {
+  border: 1px solid #ddd;
+}
+
+.bg-gray-100 {
+  background-color: #f3f4f6;
+}
+
+.bg-gray-50 {
+  background-color: #fafafa;
+}
+
+.bg-white {
+  background-color: white;
+}
+
+/* THIS is the important one for slot selection */
+.bg-green-400 {
+  background-color: #4ade80; /* Tailwind green-400 equivalent */
+}
+
+.w-24 {
+  width: 6rem;
+}
+
+.h-8 {
+  height: 2rem;
+}
+
+.p-1 {
+  padding: 0.25rem;
+}
+
+.p-2 {
+  padding: 0.5rem;
+}
+
+.rounded {
+  border-radius: 6px;
+}
+
+.cursor-pointer {
+  cursor: pointer;
+}
+
+.select-none {
+  user-select: none;
+}
+
+.overflow-x-auto {
+  overflow-x: auto;
+}
+
+/* Button styling */
+
+.bg-blue-600 {
+  background-color: #2563eb;
+}
+
+.text-white {
+  color: white;
+}
+
+.shadow {
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.hover\\:bg-blue-700:hover {
+  background-color: #1d4ed8;
+}
+
+.px-4 {
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+.py-2 {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+/* Form elements */
+
+select {
+  border: 1px solid #ccc;
+  padding: 0.3rem 0.4rem;
+  border-radius: 4px;
+}
