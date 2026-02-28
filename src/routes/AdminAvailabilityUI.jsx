@@ -1,6 +1,34 @@
 import React, { useState, useEffect } from "react";
 import "./adminAvailability.css";
 
+// Convert UTC ISO timestamp to Toronto local time components.
+// Returns { dateKey: "YYYY-MM-DD", timeKey: "H:MM" }
+function utcToTorontoTime(isoString) {
+  const utcDate = new Date(isoString);
+
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Toronto',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(utcDate);
+  const timeObj = {};
+  parts.forEach(({ type, value }) => {
+    timeObj[type] = value;
+  });
+
+  const dateKey = `${timeObj.year}-${timeObj.month}-${timeObj.day}`;
+  const hour = parseInt(timeObj.hour, 10);
+  const timeKey = `${hour}:${timeObj.minute}`;
+
+  return { dateKey, timeKey };
+}
+
 // Utility to get dates for the week two weeks from now
 function getWeekTwoWeeksFromNow() {
   const start = new Date();
@@ -79,15 +107,20 @@ export default function AdminAvailabilityUI() {
       return;
     }
 
-    // load availability for the selected admin
-    fetch('/api/availability')
+    // load availability for the selected admin from server, which now stores
+    // slots in an "availability" table keyed by tech_support_admin_name.
+    fetch(`/api/availability?tech_support_admin_name=${encodeURIComponent(
+      selectedAdmin
+    )}`)
       .then((res) => res.json())
-      .then((data) => {
-        const adminData = data[selectedAdmin] || {};
+      .then((rows) => {
+        // server returns an array of slot records -- convert to the
+        // { dateKey: { time: true } } structure the UI uses internally.
         const converted = {};
-        Object.entries(adminData).forEach(([date, timesArr]) => {
-          converted[date] = {};
-          (timesArr || []).forEach((t) => (converted[date][t] = true));
+        (rows || []).forEach((r) => {
+          const { dateKey, timeKey } = utcToTorontoTime(r.date);
+          if (!converted[dateKey]) converted[dateKey] = {};
+          converted[dateKey][timeKey] = true;
         });
         setAvailability(converted);
       })
@@ -100,7 +133,10 @@ export default function AdminAvailabilityUI() {
       return;
     }
 
-    const payload = { adminName: selectedAdmin, availability };
+    // send payload matching the new table schema. the server still
+    // understands the legacy "adminName" key, but we prefer to use the
+    // new column name directly.
+    const payload = { tech_support_admin_name: selectedAdmin, availability };
 
     try {
       const res = await fetch('/api/availability', {

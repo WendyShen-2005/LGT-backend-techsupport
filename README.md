@@ -84,6 +84,21 @@ The server code under `server/` now uses Postgres instead of JSON files.
 2. **Database schema**
    Run `server/init-db.sql` on your PostgreSQL instance (Railway provides one)
    to create the two tables: `req_forms` and `availability`.
+   The `availability` table now stores a row per 30‑minute slot and uses the
+   `tech_support_admin_name` column to identify the admin (previous versions
+   keyed slots by a nested JSON object). The `date` column is now `timestamptz`
+   so time‑of‑day is preserved; the migration script also adds a unique index
+   on `(tech_support_admin_name, date)` to prevent duplicate slots.
+   The GET endpoint accepts an optional
+   `?tech_support_admin_name=Alice` query parameter so clients can fetch slots
+   for a single admin efficiently.
+
+   Optionally use the provided `server/seed.js` script to populate example
+   availability slots:
+   ```bash
+   cd server
+   DATABASE_URL=... node seed.js
+   ```
 
 3. **Environment**
    Railway automatically sets `DATABASE_URL`; locally you can export it:
@@ -104,4 +119,16 @@ The server code under `server/` now uses Postgres instead of JSON files.
    - The database plugin provides `DATABASE_URL` automatically.
 
 6. **Testing the API**
-   Use `server/test-patch.js` or `curl` to exercise the `/api/...` endpoints.
+   Use `server/test-patch.js`, the new `server/test-booking.js` script, or `curl` to
+   exercise the `/api/...` endpoints. The availability PATCH endpoint now
+   understands both the legacy bulk format (`adminName` + `availability` map)
+   and the preferred new schema (`tech_support_admin_name` + `availability`).
+
+   Note the flow for a booking:
+   1. POST `/api/book` with `{adminName,date,time}` to reserve a slot (returns
+      `booking.bookingFormId`).
+   2. POST `/api/form-submit` with the same `bookingId` plus customer details
+      (including new `is_18` and `lgt_member` flags).
+
+   The `req_forms` table schema has been expanded with `os`, `is_18`,
+   `lgt_member` and the `date` column is `TIMESTAMPTZ` with a default of now().

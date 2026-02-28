@@ -1,19 +1,83 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+
+// Convert UTC ISO timestamp to Toronto local time components.
+// Returns { dateKey: "YYYY-MM-DD", timeKey: "H:MM" }
+function utcToTorontoTime(isoString) {
+  const utcDate = new Date(isoString);
+
+  // Format as Toronto time using Intl API
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Toronto',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(utcDate);
+  const timeObj = {};
+  parts.forEach(({ type, value }) => {
+    timeObj[type] = value;
+  });
+
+  const dateKey = `${timeObj.year}-${timeObj.month}-${timeObj.day}`;
+  // Remove leading zero from hour if present (e.g., "08" → "8")
+  const hour = parseInt(timeObj.hour, 10);
+  const timeKey = `${hour}:${timeObj.minute}`;
+
+  return { dateKey, timeKey };
+}
 
 export default function BookingForm() {
   const { state } = useLocation();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+  const [slotAvailable, setSlotAvailable] = useState(true);
   const [formData, setFormData] = useState({
     name: '',
     email: '',
     phone: '',
     issueDescription: '',
     deviceType: '',
+    os: '',
     urgencyLevel: 'medium',
+    is18: false,
+    lgtMember: false,
   });
+
+    // whenever the form loads make sure the slot still exists (it may have been
+  // booked by someone else since the user picked it). if it's gone we show a
+  // friendly message and keep the submit button disabled.
+  useEffect(() => {
+    if (!state || !state.adminName) return;
+
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/availability?tech_support_admin_name=${encodeURIComponent(
+            state.adminName
+          )}`
+        );
+        if (!res.ok) throw new Error('could not fetch availability');
+        const data = await res.json();
+        const exists = data.some((row) => {
+          const { dateKey, timeKey } = utcToTorontoTime(row.date);
+          return dateKey === state.date && timeKey === state.time;
+        });
+        if (!exists) {
+          setMessage('The selected time slot is no longer available.');
+          setSlotAvailable(false);
+        }
+      } catch (err) {
+        console.error('availability check failed', err);
+      }
+    })();
+  }, [state]);
+
 
   if (!state || !state.adminName) {
     return (
@@ -24,6 +88,11 @@ export default function BookingForm() {
   }
 
   const handleSubmit = async () => {
+    if (!slotAvailable) {
+      setMessage('Cannot submit – slot no longer available.');
+      return;
+    }
+
     if (!formData.name || !formData.email || !formData.phone || !formData.issueDescription) {
       setMessage('Please fill in all required fields.');
       return;
@@ -32,6 +101,7 @@ export default function BookingForm() {
     setLoading(true);
     setMessage('');
     try {
+      // reserve the slot and get bookingId
       const res = await fetch('/api/book', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -40,6 +110,7 @@ export default function BookingForm() {
 
       const json = await res.json();
       if (!res.ok) {
+        // bubble up server error message so we can show it below
         throw new Error(json.error || 'Failed to create booking');
       }
 
@@ -51,13 +122,16 @@ export default function BookingForm() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           bookingId,
-          name: formData.name,
+          full_name: formData.name,
           email: formData.email,
-          phone: formData.phone,
-          issueDescription: formData.issueDescription,
-          deviceType: formData.deviceType,
-          urgencyLevel: formData.urgencyLevel,
-          submittedAt: new Date().toISOString(),
+          phone_num: formData.phone,
+          description: formData.issueDescription,
+          device_type: formData.deviceType,
+          os: formData.os,
+          urgency_level: formData.urgencyLevel,
+          is_18: formData.is18,
+          lgt_member: formData.lgtMember,
+          date: new Date().toISOString(),
         }),
       });
 
@@ -70,7 +144,12 @@ export default function BookingForm() {
       setTimeout(() => navigate('/test-booking'), 1200);
     } catch (err) {
       console.error(err);
-      setMessage('Failed to create booking. See console.');
+      // if the server told us the slot is unavailable, show a clearer message
+      if (err.message && err.message.toLowerCase().includes('requested time not available')) {
+        setMessage('Selected time is no longer available. Please pick another slot.');
+      } else {
+        setMessage('Failed to create booking. See console.');
+      }
     } finally {
       setLoading(false);
     }
@@ -175,6 +254,21 @@ export default function BookingForm() {
           </select>
         </div>
 
+        {/* Operating System - Optional */}
+        <div>
+          <label className="block font-semibold mb-2">
+            Operating System (optional)
+          </label>
+          <input
+            type="text"
+            name="os"
+            value={formData.os}
+            onChange={handleInputChange}
+            className="w-full border border-gray-300 rounded px-3 py-2"
+            placeholder="e.g. Windows 11, macOS 13, etc."
+          />
+        </div>
+
         {/* Urgency Level - Optional */}
         <div>
           <label className="block font-semibold mb-2">
@@ -191,6 +285,35 @@ export default function BookingForm() {
             <option value="high">High</option>
             <option value="critical">Critical</option>
           </select>
+        </div>
+
+        {/* Age confirmation & membership */}
+        <div className="flex items-center space-x-4">
+          <label className="flex items-center">
+            <input
+              type="checkbox"
+              name="is18"
+              checked={formData.is18}
+              onChange={(e) =>
+                setFormData((p) => ({ ...p, is18: e.target.checked }))
+              }
+              className="mr-2"
+            />
+            I confirm I am 18 or older
+          </label>
+
+          <label className="flex items-center">
+            <input
+              type="checkbox"
+              name="lgtMember"
+              checked={formData.lgtMember}
+              onChange={(e) =>
+                setFormData((p) => ({ ...p, lgtMember: e.target.checked }))
+              }
+              className="mr-2"
+            />
+            I am an LGT member
+          </label>
         </div>
 
         <div className="pt-4">

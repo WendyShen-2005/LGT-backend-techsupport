@@ -1,5 +1,33 @@
 import React, { useState, useEffect } from 'react';
 
+// Convert UTC ISO timestamp to Toronto local time components.
+// Returns { dateKey: "YYYY-MM-DD", timeKey: "H:MM" }
+function utcToTorontoTime(isoString) {
+  const utcDate = new Date(isoString);
+
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Toronto',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(utcDate);
+  const timeObj = {};
+  parts.forEach(({ type, value }) => {
+    timeObj[type] = value;
+  });
+
+  const dateKey = `${timeObj.year}-${timeObj.month}-${timeObj.day}`;
+  const hour = parseInt(timeObj.hour, 10);
+  const timeKey = `${hour}:${timeObj.minute}`;
+
+  return { dateKey, timeKey };
+}
+
 export default function AdminBookingsUI() {
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -38,10 +66,10 @@ export default function AdminBookingsUI() {
 
       if (!response.ok) throw new Error('Failed to confirm booking');
 
-      // Update local state
+      // Update local state immediately with correct field names
       setBookings((prevBookings) =>
         prevBookings.map((b) =>
-          b.id === bookingId ? { ...b, adminConfirmed: true } : b
+          b.id === bookingId ? { ...b, admin_confirmed: true } : b
         )
       );
     } catch (err) {
@@ -101,8 +129,8 @@ export default function AdminBookingsUI() {
   }
 
   const filteredBookings = bookings.filter((booking) => {
-    if (filter === 'confirmed') return booking.adminConfirmed;
-    if (filter === 'unconfirmed') return !booking.adminConfirmed;
+    if (filter === 'confirmed') return booking.admin_confirmed;
+    if (filter === 'unconfirmed') return !booking.admin_confirmed;
     return true;
   });
 
@@ -158,26 +186,29 @@ export default function AdminBookingsUI() {
             <div
               key={booking.id}
               className={`border rounded-lg p-4 ${
-                booking.adminConfirmed
+                booking.admin_confirmed
                   ? 'bg-green-50 border-green-300'
                   : 'bg-yellow-50 border-yellow-300'
               }`}
             >
               <div className="flex justify-between items-start mb-3">
                 <div>
-                  <p className="font-semibold text-lg">Admin: {booking.adminName}</p>
+                  <p className="font-semibold text-lg">Admin: {booking.tech_support_admin_name}</p>
                   <p className="text-gray-600">
-                    Date: {booking.date} at {booking.time}
+                    Slot Date: {booking.slot_date ? (() => {
+                      const { dateKey, timeKey } = utcToTorontoTime(booking.slot_date);
+                      return `${dateKey} at ${timeKey}`;
+                    })() : 'N/A'}
                   </p>
                   <p className="text-sm text-gray-500">
-                    Requested: {new Date(booking.createdAt).toLocaleDateString()}
+                    Requested: {booking.date ? new Date(booking.date).toLocaleDateString() : 'N/A'}
                   </p>
                   <p className="text-sm text-gray-500">
                     Booking ID: {booking.id}
                   </p>
                 </div>
                 <div className="text-sm font-medium">
-                  {booking.adminConfirmed ? (
+                  {booking.admin_confirmed ? (
                     <span className="bg-green-200 text-green-800 px-3 py-1 rounded">
                       ✓ Confirmed
                     </span>
@@ -189,7 +220,7 @@ export default function AdminBookingsUI() {
                 </div>
               </div>
 
-              {!booking.adminConfirmed && (
+              {!booking.admin_confirmed && (
                 <div className="flex gap-2 mb-3">
                   <button
                     onClick={() => handleConfirm(booking.id)}
@@ -217,18 +248,24 @@ export default function AdminBookingsUI() {
                 <div className="mt-4 bg-white border border-blue-200 rounded p-4">
                   <h3 className="font-bold text-lg mb-3">Form Details</h3>
                   <div className="space-y-2 text-sm">
-                    <p><span className="font-semibold">Name:</span> {formDetails[booking.id].name}</p>
+                    <p><span className="font-semibold">Name:</span> {formDetails[booking.id].full_name}</p>
                     <p><span className="font-semibold">Email:</span> {formDetails[booking.id].email}</p>
-                    <p><span className="font-semibold">Phone:</span> {formDetails[booking.id].phone}</p>
+                    <p><span className="font-semibold">Phone:</span> {formDetails[booking.id].phone_num}</p>
                     <div>
                       <span className="font-semibold">Issue Description:</span>
-                      <p className="mt-1 bg-gray-50 p-2 rounded">{formDetails[booking.id].issueDescription}</p>
+                      <p className="mt-1 bg-gray-50 p-2 rounded">{formDetails[booking.id].description}</p>
                     </div>
-                    {formDetails[booking.id].deviceType && (
-                      <p><span className="font-semibold">Device Type:</span> {formDetails[booking.id].deviceType}</p>
+                    {formDetails[booking.id].device_type && (
+                      <p><span className="font-semibold">Device Type:</span> {formDetails[booking.id].device_type}</p>
                     )}
-                    <p><span className="font-semibold">Urgency Level:</span> {formDetails[booking.id].urgencyLevel}</p>
-                    <p className="text-gray-500"><span className="font-semibold">Submitted:</span> {new Date(formDetails[booking.id].submittedAt).toLocaleString()}</p>
+                    {formDetails[booking.id].os && (
+                      <p><span className="font-semibold">Operating System:</span> {formDetails[booking.id].os}</p>
+                    )}
+                    <p><span className="font-semibold">Urgency Level:</span> {formDetails[booking.id].urgency_level || 'Not specified'}</p>
+                    <p><span className="font-semibold">Tech Comfort:</span> {formDetails[booking.id].tech_comfort || 'Not specified'}</p>
+                    <p><span className="font-semibold">Age 18+:</span> {formDetails[booking.id].is_18 ? 'Yes' : 'No'}</p>
+                    <p><span className="font-semibold">LGT Member:</span> {formDetails[booking.id].lgt_member ? 'Yes' : 'No'}</p>
+                    <p className="text-gray-500"><span className="font-semibold">Submitted:</span> {new Date(formDetails[booking.id].date).toLocaleString()}</p>
                   </div>
                 </div>
               )}
