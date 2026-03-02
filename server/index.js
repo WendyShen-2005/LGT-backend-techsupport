@@ -1,10 +1,20 @@
+require('dotenv').config();
+
 const express = require('express');
 const { Pool } = require('pg');
+const { DateTime } = require('luxon');
+
+// optional SendGrid (Twilio Email) for confirmation messages
+const sgMail = require('@sendgrid/mail');
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || '';
+const EMAIL_SENDER = process.env.EMAIL_SENDER || 'wendys05@my.yorku.ca';
+if (SENDGRID_API_KEY) {
+  sgMail.setApiKey(SENDGRID_API_KEY);
+}
 
 const app = express();
 app.use(express.json());
 
-require('dotenv').config();
 
 // Enable CORS for all routes
 app.use((req, res, next) => {
@@ -40,85 +50,48 @@ app.get('/', (req, res) => {
   res.send('API is running');
 });
 
-// Helper: convert a date string (YYYY-MM-DD) and time string (H:MM)
-// interpreted as Toronto local time to a UTC ISO string.
-function torontoTimeToUTC(dateKey, timeStr) {
-  if (!dateKey || !timeStr) {
-    throw new Error(`Missing dateKey or timeStr: ${dateKey} ${timeStr}`);
+// POST /api/send-confirmation
+// simple wrapper around SendGrid to send an email from the configured sender.
+// body should include { to, subject, text, html? }
+app.post('/api/send-confirmation', async (req, res) => {
+  if (!SENDGRID_API_KEY) {
+    return res.status(500).json({ error: 'email service not configured' });
   }
 
-  const [year, month, day] = dateKey.split('-').map(Number);
-  const [hour, minute] = timeStr.split(':').map(Number);
+  const { to, subject, text, html } = req.body || {};
+  if (!to || !subject || (!text && !html)) {
+    return res.status(400).json({ error: 'to, subject and text or html required' });
+  }
 
-  if (
-    Number.isNaN(year) ||
-    Number.isNaN(month) ||
-    Number.isNaN(day) ||
-    Number.isNaN(hour) ||
-    Number.isNaN(minute)
-  ) {
+  const msg = {
+    to,
+    from: EMAIL_SENDER,
+    subject,
+    text,
+    html,
+  };
+
+  try {
+    await sgMail.send(msg);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('SendGrid error', err);
+    res.status(500).json({ error: 'failed to send email' });
+  }
+});
+
+function torontoTimeToUTC(dateKey, timeStr) {
+  const dt = DateTime.fromFormat(
+    `${dateKey} ${timeStr}`,
+    'yyyy-MM-dd H:mm',
+    { zone: 'America/Toronto' }
+  );
+
+  if (!dt.isValid) {
     throw new Error(`Invalid date/time: ${dateKey} ${timeStr}`);
   }
 
-  // Start with a guess: assume the input time is UTC (it won't be, but we'll adjust)
-  let guessUTC = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
-
-  const torontoFormatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Toronto',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
-
-  // Iterate to converge: adjust guessUTC until formatting it in Toronto
-  // timezone produces the desired date/time
-  for (let i = 0; i < 30; i++) {
-    const parts = torontoFormatter.formatToParts(guessUTC);
-    const timeObj = {};
-    parts.forEach(({ type, value }) => {
-      if (['year', 'month', 'day', 'hour', 'minute'].includes(type)) {
-        timeObj[type] = parseInt(value, 10);
-      }
-    });
-
-    // Check if we've converged to the target
-    if (
-      timeObj.year === year &&
-      timeObj.month === month &&
-      timeObj.day === day &&
-      timeObj.hour === hour &&
-      timeObj.minute === minute
-    ) {
-      return guessUTC.toISOString();
-    }
-
-    // Calculate adjustment needed
-    // How many minutes off is the current guess?
-    let adjustMinutes = 0;
-
-    // Handle date differences
-    if (timeObj.year !== year) {
-      adjustMinutes += (year - timeObj.year) * 365 * 24 * 60;
-    }
-    if (timeObj.month !== month) {
-      adjustMinutes += (month - timeObj.month) * 30 * 24 * 60;
-    }
-    if (timeObj.day !== day) {
-      adjustMinutes += (day - timeObj.day) * 24 * 60;
-    }
-
-    // Handle time differences
-    adjustMinutes += (hour - timeObj.hour) * 60;
-    adjustMinutes += minute - timeObj.minute;
-
-    // Adjust the guess
-    guessUTC = new Date(guessUTC.getTime() + adjustMinutes * 60 * 1000);
-  }
-
-  throw new Error(`Failed to converge on UTC time for ${dateKey} ${timeStr}`);
+  return dt.toUTC().toISO();
 }
 
 pool.on('connect', () => {
@@ -448,36 +421,102 @@ app.get('/api/bookings', async (req, res) => {
 // PATCH mark form as confirmed by admin
 app.patch('/api/form/:id/confirm', async (req, res) => {
   const id = parseInt(req.params.id, 10);
+  const { google_meet_link } = req.body || {};
   if (Number.isNaN(id)) return res.status(400).json({ error: 'invalid id' });
+  if (!google_meet_link || typeof google_meet_link !== 'string') {
+    return res.status(400).json({ error: 'google_meet_link is required' });
+  }
 
+  const client = await pool.connect();
   try {
-    const { rows } = await pool.query(
+    await client.query('BEGIN');
+
+    // ensure the form exists
+    const { rows: formRows } = await client.query('SELECT * FROM req_forms WHERE id = $1', [id]);
+    if (formRows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'form not found' });
+    }
+
+    // update the availability row tied to this form with the meet link
+    const { rows: availRows } = await client.query(
+      'SELECT * FROM availability WHERE booking_form_id = $1 LIMIT 1',
+      [id]
+    );
+    if (availRows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'no availability slot found for this form' });
+    }
+
+    await client.query(
+      'UPDATE availability SET google_meet_link = $1 WHERE booking_form_id = $2',
+      [google_meet_link, id]
+    );
+
+    const { rows: updated } = await client.query(
       'UPDATE req_forms SET admin_confirmed = TRUE WHERE id = $1 RETURNING *',
       [id]
     );
-    if (rows.length === 0) return res.status(404).json({ error: 'not found' });
-    res.json({ success: true, form: rows[0] });
+
+    await client.query('COMMIT');
+    res.json({ success: true, form: updated[0] });
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error(err);
     res.status(500).json({ error: 'database error' });
+  } finally {
+    client.release();
   }
 });
 
 // PATCH confirm booking (alias for /api/form/:id/confirm)
 app.patch('/api/bookings/:id/confirm', async (req, res) => {
   const id = parseInt(req.params.id, 10);
+  const { google_meet_link } = req.body || {};
   if (Number.isNaN(id)) return res.status(400).json({ error: 'invalid id' });
+  if (!google_meet_link || typeof google_meet_link !== 'string') {
+    return res.status(400).json({ error: 'google_meet_link is required' });
+  }
 
+  const client = await pool.connect();
   try {
-    const { rows } = await pool.query(
+    await client.query('BEGIN');
+
+    // ensure the form exists
+    const { rows: formRows } = await client.query('SELECT * FROM req_forms WHERE id = $1', [id]);
+    if (formRows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'form not found' });
+    }
+
+    // update availability with meet link
+    const { rows: availRows } = await client.query(
+      'SELECT * FROM availability WHERE booking_form_id = $1 LIMIT 1',
+      [id]
+    );
+    if (availRows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'no availability slot found for this booking' });
+    }
+
+    await client.query('UPDATE availability SET google_meet_link = $1 WHERE booking_form_id = $2', [
+      google_meet_link,
+      id,
+    ]);
+
+    const { rows: updated } = await client.query(
       'UPDATE req_forms SET admin_confirmed = TRUE WHERE id = $1 RETURNING *',
       [id]
     );
-    if (rows.length === 0) return res.status(404).json({ error: 'not found' });
-    res.json({ success: true, booking: rows[0] });
+
+    await client.query('COMMIT');
+    res.json({ success: true, booking: updated[0] });
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error(err);
     res.status(500).json({ error: 'database error' });
+  } finally {
+    client.release();
   }
 });
 
@@ -500,6 +539,107 @@ app.patch('/api/bookings/:id/reject', async (req, res) => {
     } finally {
       client.release();
     }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'database error' });
+  }
+});
+
+/* ------------------------------------------------------------------
+   group sessions & bookings endpoints
+------------------------------------------------------------------ */
+
+// GET /api/group-sessions
+// Returns all group sessions with their details
+app.get('/api/group-sessions', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT * FROM group_sessions ORDER BY date ASC'
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'database error' });
+  }
+});
+
+// GET /api/group-bookings
+// Returns all group bookings with participant details
+app.get('/api/group-bookings', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT 
+        gb.id,
+        gb.group_id,
+        gb.full_name,
+        gb.device_type,
+        gb.os,
+        gb.comfort_level,
+        gb.email,
+        gb.phone,
+        gb.issue_desc,
+        gb.allowed,
+        gs.date as session_date,
+        gs.description as session_description
+      FROM group_bookings gb
+      LEFT JOIN group_sessions gs ON gs.id = gb.group_id
+      ORDER BY gb.id DESC
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'database error' });
+  }
+});
+
+// POST /api/group-bookings
+// Submit a new group booking
+app.post('/api/group-bookings', async (req, res) => {
+  const {
+    group_id,
+    full_name,
+    device_type,
+    os,
+    comfort_level,
+    email,
+    phone,
+    issue_desc,
+    allowed,
+  } = req.body || {};
+
+  if (!group_id || !full_name || !email) {
+    return res.status(400).json({ error: 'group_id, full_name, and email are required' });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO group_bookings 
+        (group_id, full_name, device_type, os, comfort_level, email, phone, issue_desc, allowed)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [group_id, full_name, device_type || null, os || null, comfort_level || null, email, phone || null, issue_desc || null, allowed ?? false]
+    );
+    console.log(rows);
+    res.json({ success: true, booking: rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'failed to create group booking' });
+  }
+});
+
+// PATCH /api/group-sessions/:id/increment-users
+// Increment num_users by 1 for a group session
+app.patch('/api/group-sessions/:id/increment-users', async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'invalid id' });
+
+  try {
+    const { rows } = await pool.query(
+      'UPDATE group_sessions SET num_users = num_users + 1 WHERE id = $1 RETURNING *',
+      [id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'group session not found' });
+    res.json({ success: true, session: rows[0] });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'database error' });

@@ -15,9 +15,9 @@ root.render(
     <BrowserRouter>
       <div className="p-4 border-b mb-4">
         <nav className="flex gap-4">
-          <Link to="/">Admin Availability</Link>
-          <Link to="/bookings">Booking Requests</Link>
-          <Link to="/test-booking">Test Booking</Link>
+          <Link style={{margin:"10px"}} to="/">Admin Availability</Link>
+          <Link style={{margin:"10px"}} to="/bookings">Booking Requests</Link>
+          {/* <Link style={{margin:"10px"}} to="/test-booking">Test Booking</Link> */}
         </nav>
       </div>
 

@@ -34,11 +34,34 @@ CREATE TABLE availability (
   id serial PRIMARY KEY,
   booking_form_id integer REFERENCES req_forms(id),
   tech_support_admin_name text,
-  date timestamptz
+  date timestamptz,
+  google_meet_link text
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS availability_admin_date_unique
   ON availability (tech_support_admin_name, date);
+
+CREATE TABLE group_sessions (
+  id serial PRIMARY KEY,
+  date timestamptz,
+  description text,
+  max_users integer,
+  num_users integer DEFAULT 0,
+  google_meet_link text
+);
+
+CREATE TABLE group_bookings (
+  id serial PRIMARY KEY,
+  group_id integer REFERENCES group_sessions(id),
+  full_name text,
+  device_type text,
+  os text,
+  comfort_level integer,
+  email text,
+  phone text,
+  issue_desc text,
+  allowed boolean DEFAULT false
+);
 ```
 
 ### Important Backend Utilities
@@ -70,10 +93,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS availability_admin_date_unique
 
 - `GET /api/form/:id` – Retrieve a specific request form.
 - `GET /api/bookings` – Return all bookings joined with their availability slot details.
-- `PATCH /api/form/:id/confirm` & `PATCH /api/bookings/:id/confirm` – Mark a booking as confirmed.
+- `PATCH /api/form/:id/confirm` & `PATCH /api/bookings/:id/confirm` – Mark a booking as confirmed. Both endpoints now require a `google_meet_link` property in the request body and will save that link to the availability record associated with the booking.
 - `PATCH /api/bookings/:id/reject` – Reject a booking, freeing up the slot and deleting the form.
 
-### Starting the Server
+- `POST /api/send-confirmation` – **optional** email helper that forwards the supplied `to`, `subject`, `text` and/or `html` to the configured Twilio SendGrid account. Requires `SENDGRID_API_KEY` in the environment; sender is controlled by `EMAIL_SENDER`.
+
+#### Group Sessions & Bookings
+
+- `GET /api/group-sessions` – Retrieve all group sessions with their details (date, description, max_users, num_users, google_meet_link).
+
+- `GET /api/group-bookings` – Retrieve all group bookings, joined with their associated group session details.
+
+- `POST /api/group-bookings` – Submit a new group booking. Request body should include:
+  ```json
+  {
+    "group_id": 1,
+    "full_name": "John Doe",
+    "email": "john@example.com",
+    "device_type": "laptop",
+    "os": "Windows",
+    "comfort_level": 3,
+    "phone": "555-1234",
+    "issue_desc": "Having trouble with...",
+    "allowed": false
+  }
+  ```
+  Required fields: `group_id`, `full_name`, `email`. Others are optional.
+
+- `PATCH /api/group-sessions/:id/increment-users` – Increment the `num_users` count by 1 for a given group session. Used when a participant successfully registers.
+
+---
 
 ```bash
 cd server
@@ -83,6 +132,14 @@ node index.js
 ```
 
 The server listens on port `4000` by default.
+
+### Environment Variables (backend)
+
+- `DATABASE_URL` – PostgreSQL connection string.
+- `PORT` – optional port to listen on (defaults to 4000).
+- `SENDGRID_API_KEY` – **(optional)** API key for Twilio SendGrid email service. Leave blank during development; the API will reject email requests if unset.
+- `EMAIL_SENDER` – sender address used for outgoing confirmation emails. Defaults to `wendys05@my.yorku.ca` if not provided.
+
 
 ---
 
@@ -143,6 +200,8 @@ Ensure the backend is running concurrently on port 4000.
 - Keep timezone helper logic in a shared utility if both frontend and backend need it.
 - Validate payloads on both sides to avoid malformed dates.
 - Use React Context or a data-fetching library (SWR/React Query) for more advanced state management.
+
+**Admin UI note:** When confirming a booking, admins must provide a Google Meet link. Please invite the user to the meeting when creating the link so they receive the calendar/email notification from Google; alternatively, use the backend's `POST /api/send-confirmation` to send a custom email notification after confirming.
 
 ---
 

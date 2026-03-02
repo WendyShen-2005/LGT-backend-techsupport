@@ -31,7 +31,27 @@ async function run() {
     }),
   });
   console.log('form status', formRes.status);
-  console.log('form json', await formRes.json());
+  const formJson = await formRes.json();
+  console.log('form json', formJson);
+
+  // optionally send a confirmation email if the endpoint is reachable
+  if (formRes.ok) {
+    const emailRes = await fetch(base + '/api/send-confirmation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        to: 'test-recipient@example.com',
+        subject: 'Booking received',
+        text: 'Your booking was successfully recorded.',
+      }),
+    });
+    console.log('email status', emailRes.status);
+    try {
+      console.log('email json', await emailRes.json());
+    } catch (e) {
+      console.log('email response not JSON');
+    }
+  }
 }
 
 run().catch(console.error);
